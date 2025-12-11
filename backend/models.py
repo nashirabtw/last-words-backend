@@ -11,9 +11,9 @@ class Message(Base):
     country = Column(String, nullable=False)
     emoji = Column(String, nullable=False)
 
-    # Ubicación
+    # Coordenadas del pin
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
 
-    # Para parpadeo "nuevo" y orden temporal
+    # Fecha de creación (para parpadeo en el mapa)
     created_at = Column(DateTime, default=datetime.utcnow)
