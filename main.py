@@ -32,7 +32,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # solo para desarrollo
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,7 +75,7 @@ def home():
     return {"status": "API funcionando"}
 
 # ========================
-# PAGO → TOKEN
+# PAYPAL → TOKEN
 # ========================
 @app.post("/payment-success")
 def payment_success():
@@ -84,24 +84,20 @@ def payment_success():
     return {"token": token}
 
 # ========================
-# VIP CODE → TOKEN (GRATIS)
+# VIP CODE → TOKEN (FREE)
 # ========================
 @app.post("/use-free-code")
 def use_free_code(data: CodeRequest):
     code = data.code.strip().upper()
 
-    # validar que existe
     if code not in FREE_CODES:
         raise HTTPException(status_code=400, detail="Invalid code")
 
-    # validar que no esté usado
     if code in USED_CODES:
         raise HTTPException(status_code=403, detail="Code already used")
 
-    # marcar como usado
     USED_CODES.add(code)
 
-    # generar token de 1 uso
     token = str(uuid.uuid4())
     valid_tokens.add(token)
 
@@ -118,7 +114,6 @@ def send_message(
     if not x_payment_token or x_payment_token not in valid_tokens:
         raise HTTPException(status_code=403, detail="Pago requerido")
 
-    # consumir token
     valid_tokens.remove(x_payment_token)
 
     db: Session = SessionLocal()
@@ -138,7 +133,7 @@ def send_message(
     return {"status": "guardado", "id": msg.id}
 
 # ========================
-# LISTAR MENSAJES (PÚBLICO)
+# LISTAR MENSAJES
 # ========================
 @app.get("/messages")
 def get_messages():
