@@ -1,7 +1,3 @@
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
 from fastapi import FastAPI, Header, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,6 +6,7 @@ import uuid
 
 from backend.database import SessionLocal, engine
 from backend.models import Base, Message
+
 # ========================
 # FREE CODES (VIP ACCESS)
 # ========================
@@ -67,6 +64,9 @@ class AdminLogin(BaseModel):
     username: str
     password: str
 
+class CodeRequest(BaseModel):
+    code: str
+
 # ========================
 # HEALTH CHECK
 # ========================
@@ -84,60 +84,8 @@ def payment_success():
     return {"token": token}
 
 # ========================
-# ENVIAR MENSAJE
+# VIP CODE → TOKEN (GRATIS)
 # ========================
-@app.post("/send-message")
-def send_message(
-    data: MessageRequest,
-    x_payment_token: str = Header(None)
-):
-    if not x_payment_token or x_payment_token not in valid_tokens:
-        raise HTTPException(status_code=403, detail="Pago requerido")
-
-    # consumir token (1 pago = 1 mensaje)
-    valid_tokens.remove(x_payment_token)
-
-    db: Session = SessionLocal()
-    msg = Message(
-        name=data.name,
-        message=data.message,
-        country=data.country,
-        emoji=data.emoji,
-        latitude=data.latitude,
-        longitude=data.longitude
-    )
-    db.add(msg)
-    db.commit()
-    db.refresh(msg)
-    db.close()
-
-    return {"status": "guardado", "id": msg.id}
-
-# ========================
-# LISTAR MENSAJES (PUBLICO)
-# ========================
-@app.get("/messages")
-def get_messages():
-    db: Session = SessionLocal()
-    messages = db.query(Message).all()
-    db.close()
-
-    return [
-        {
-            "id": m.id,
-            "name": m.name,
-            "message": m.message,
-            "country": m.country,
-            "emoji": m.emoji,
-            "latitude": m.latitude,
-            "longitude": m.longitude,
-            "created_at": m.created_at.isoformat()
-        }
-        for m in messages
-    ]
-class CodeRequest(BaseModel):
-    code: str
-
 @app.post("/use-free-code")
 def use_free_code(data: CodeRequest):
     code = data.code.strip().upper()
@@ -160,6 +108,59 @@ def use_free_code(data: CodeRequest):
     return {"token": token}
 
 # ========================
+# ENVIAR MENSAJE
+# ========================
+@app.post("/send-message")
+def send_message(
+    data: MessageRequest,
+    x_payment_token: str = Header(None)
+):
+    if not x_payment_token or x_payment_token not in valid_tokens:
+        raise HTTPException(status_code=403, detail="Pago requerido")
+
+    # consumir token
+    valid_tokens.remove(x_payment_token)
+
+    db: Session = SessionLocal()
+    msg = Message(
+        name=data.name,
+        message=data.message,
+        country=data.country,
+        emoji=data.emoji,
+        latitude=data.latitude,
+        longitude=data.longitude
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    db.close()
+
+    return {"status": "guardado", "id": msg.id}
+
+# ========================
+# LISTAR MENSAJES (PÚBLICO)
+# ========================
+@app.get("/messages")
+def get_messages():
+    db: Session = SessionLocal()
+    messages = db.query(Message).all()
+    db.close()
+
+    return [
+        {
+            "id": m.id,
+            "name": m.name,
+            "message": m.message,
+            "country": m.country,
+            "emoji": m.emoji,
+            "latitude": m.latitude,
+            "longitude": m.longitude,
+            "created_at": m.created_at.isoformat()
+        }
+        for m in messages
+    ]
+
+# ========================
 # ADMIN LOGIN
 # ========================
 ADMIN_USER = "admin"
@@ -173,29 +174,6 @@ def admin_login(data: AdminLogin):
     token = str(uuid.uuid4())
     admin_tokens[token] = True
     return {"admin_token": token}
-class CodeRequest(BaseModel):
-    code: str
-
-@app.post("/use-free-code")
-def use_free_code(data: CodeRequest):
-    code = data.code.strip().upper()
-
-    # verificar código válido
-    if code not in FREE_CODES:
-        raise HTTPException(status_code=400, detail="Invalid code")
-
-    # verificar que no esté usado
-    if code in USED_CODES:
-        raise HTTPException(status_code=403, detail="Code already used")
-
-    # marcarlo como usado
-    USED_CODES.add(code)
-
-    # generar token GRATIS de 1 uso
-    token = str(uuid.uuid4())
-    valid_tokens.add(token)
-
-    return {"token": token}
 
 # ========================
 # ADMIN: LISTAR MENSAJES
@@ -238,3 +216,19 @@ def edit_message(
     db: Session = SessionLocal()
     msg = db.query(Message).filter(Message.id == message_id).first()
 
+    if not msg:
+        db.close()
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+
+    msg.name = data.name
+    msg.message = data.message
+    msg.country = data.country
+    msg.emoji = data.emoji
+    msg.latitude = data.latitude
+    msg.longitude = data.longitude
+
+    db.commit()
+    db.refresh(msg)
+    db.close()
+
+    return {"status": "editado", "id": msg.id}
