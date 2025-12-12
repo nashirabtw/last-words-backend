@@ -227,3 +227,24 @@ def edit_message(
     db.close()
 
     return {"status": "editado", "id": msg.id}
+    # ========================
+# ADMIN: BORRAR MENSAJE
+# ========================
+@app.delete("/delete-message/{message_id}")
+def delete_message(message_id: int, x_admin_token: str = Header(None)):
+    if not x_admin_token or x_admin_token not in admin_tokens:
+        raise HTTPException(status_code=403, detail="Acceso denegado")
+
+    db: Session = SessionLocal()
+    msg = db.query(Message).filter(Message.id == message_id).first()
+
+    if not msg:
+        db.close()
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+
+    db.delete(msg)
+    db.commit()
+    db.close()
+
+    return {"status": "deleted", "id": message_id}
+
