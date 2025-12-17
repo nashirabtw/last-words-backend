@@ -1,34 +1,19 @@
-from fastapi import FastAPI, Header, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from database import SessionLocal, engine
+from models import Message, Base
+from datetime import datetime
 import uuid
 
-from backend.database import SessionLocal, engine
-from backend.models import Base, Message
-
-# ========================
-# FREE CODES (VIP ACCESS)
-# ========================
-FREE_CODES = {
-    "ST4RLI1",
-    "SOL1X0",
-    "STARVT9",
-    "MO33ON5",
-    "LIGHTRS7",
-    "SKYDD9",
-    "NOVIE2A2",
-    "GIFT4Y8L9",
-    "VI3PP8",
-    "TQET5T0"
-}
-
-USED_CODES = set()
-
-# ========================
-# APP
-# ========================
 app = FastAPI()
+
+Base.metadata.create_all(bind=engine)
+
+# =========================
+# CONFIG
+# =========================
+ADMIN_TOKEN = "CAMBIA_ESTE_TOKEN_SUPER_SECRETO"
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,213 +23,126 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ========================
-# DB
-# ========================
-Base.metadata.create_all(bind=engine)
+# =========================
+# DB DEP
+# =========================
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-# ========================
-# TOKENS
-# ========================
-valid_tokens = set()
-admin_tokens = {}
+# =========================
+# HELPERS
+# =========================
+def check_admin(x_admin_token: str):
+    if x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-# ========================
-# MODELOS
-# ========================
-class MessageRequest(BaseModel):
-    name: str
-    message: str
-    country: str
-    emoji: str
-    latitude: float
-    longitude: float
-
-class AdminLogin(BaseModel):
-    username: str
-    password: str
-
-class CodeRequest(BaseModel):
-    code: str
-
-# ========================
-# HEALTH CHECK
-# ========================
-@app.get("/")
-def home():
-    return {"status": "API funcionando"}
-
-# ========================
-# PAYPAL → TOKEN
-# ========================
-@app.post("/payment-success")
-def payment_success():
-    token = str(uuid.uuid4())
-    valid_tokens.add(token)
-    return {"token": token}
-
-# ========================
-# VIP CODE → TOKEN (FREE)
-# ========================
-@app.post("/use-free-code")
-def use_free_code(data: CodeRequest):
-    code = data.code.strip().upper()
-
-    if code not in FREE_CODES:
-        raise HTTPException(status_code=400, detail="Invalid code")
-
-    if code in USED_CODES:
-        raise HTTPException(status_code=403, detail="Code already used")
-
-    USED_CODES.add(code)
-
-    token = str(uuid.uuid4())
-    valid_tokens.add(token)
-
-    return {"token": token}
-
-# ========================
-# ENVIAR MENSAJE
-# ========================
-@app.post("/send-message")
-def send_message(
-    data: MessageRequest,
-    x_payment_token: str = Header(None)
-):
-    if not x_payment_token or x_payment_token not in valid_tokens:
-        raise HTTPException(status_code=403, detail="Pago requerido")
-
-    valid_tokens.remove(x_payment_token)
-
-    db: Session = SessionLocal()
-    msg = Message(
-        name=data.name,
-        message=data.message,
-        country=data.country,
-        emoji=data.emoji,
-        latitude=data.latitude,
-        longitude=data.longitude
+# =========================
+# PUBLIC — MAP MESSAGES
+# =========================
+@app.get("/messages")
+def get_messages(db: Session = next(get_db())):
+    messages = (
+        db.query(Message)
+        .filter(Message.hidden == False)
+        .order_by(Message.created_at.desc())
+        .all()
     )
+
+    return [
+        {
+            "id": m.id,
+            "name": m.name,
+            "message": m.message,
+            "country": m.country,
+            "emoji": m.emoji,
+            "latitude": m.latitude,
+            "longitude": m.longitude,
+            "created_at": m.created_at,
+        }
+        for m in messages
+    ]
+
+# =========================
+# SEND MESSAGE (TOKEN)
+# =========================
+@app.post("/send-message")
+def send_message(payload: dict, x_payment_token: str = Header(None)):
+    if not x_payment_token:
+        raise HTTPException(status_code=401, detail="Missing token")
+
+    db = SessionLocal()
+
+    msg = Message(
+        name=payload.get("name"),
+        message=payload.get("message"),
+        country=payload.get("country"),
+        emoji="📍",
+        latitude=payload.get("latitude"),
+        longitude=payload.get("longitude"),
+    )
+
     db.add(msg)
     db.commit()
     db.refresh(msg)
     db.close()
 
-    return {"status": "guardado", "id": msg.id}
+    return {"status": "ok"}
 
-# ========================
-# LISTAR MENSAJES
-# ========================
-@app.get("/messages")
-def get_messages():
-    db: Session = SessionLocal()
-    messages = db.query(Message).all()
-    db.close()
-
-    return [
-        {
-            "id": m.id,
-            "name": m.name,
-            "message": m.message,
-            "country": m.country,
-            "emoji": m.emoji,
-            "latitude": m.latitude,
-            "longitude": m.longitude,
-            "created_at": m.created_at.isoformat()
-        }
-        for m in messages
-    ]
-
-# ========================
-# ADMIN LOGIN
-# ========================
-ADMIN_USER = "admin"
-ADMIN_PASSWORD = "issas_admin_2025"
-
-@app.post("/admin/login")
-def admin_login(data: AdminLogin):
-    if data.username != ADMIN_USER or data.password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
-
-    token = str(uuid.uuid4())
-    admin_tokens[token] = True
-    return {"admin_token": token}
-
-# ========================
-# ADMIN: LISTAR MENSAJES
-# ========================
+# =========================
+# ADMIN — LIST ALL
+# =========================
 @app.get("/admin/messages")
-def admin_messages(x_admin_token: str = Header(None)):
-    if not x_admin_token or x_admin_token not in admin_tokens:
-        raise HTTPException(status_code=403, detail="Acceso denegado")
+def admin_messages(x_admin_token: str = Header(...)):
+    check_admin(x_admin_token)
 
-    db: Session = SessionLocal()
-    messages = db.query(Message).all()
+    db = SessionLocal()
+    messages = db.query(Message).order_by(Message.created_at.desc()).all()
     db.close()
 
     return [
         {
             "id": m.id,
-            "name": m.name,
             "message": m.message,
             "country": m.country,
-            "emoji": m.emoji,
-            "latitude": m.latitude,
-            "longitude": m.longitude,
-            "created_at": m.created_at.isoformat()
+            "hidden": m.hidden,
+            "created_at": m.created_at,
         }
         for m in messages
     ]
 
-# ========================
-# ADMIN: EDITAR MENSAJE
-# ========================
-@app.put("/edit-message/{message_id}")
-def edit_message(
-    message_id: int,
-    data: MessageRequest = Body(...),
-    x_admin_token: str = Header(None)
-):
-    if not x_admin_token or x_admin_token not in admin_tokens:
-        raise HTTPException(status_code=403, detail="Acceso denegado")
+# =========================
+# ADMIN — HIDE MESSAGE
+# =========================
+@app.patch("/admin/messages/{message_id}/hide")
+def hide_message(message_id: int, x_admin_token: str = Header(...)):
+    check_admin(x_admin_token)
 
-    db: Session = SessionLocal()
+    db = SessionLocal()
     msg = db.query(Message).filter(Message.id == message_id).first()
 
     if not msg:
         db.close()
-        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+        raise HTTPException(status_code=404, detail="Message not found")
 
-    msg.name = data.name
-    msg.message = data.message
-    msg.country = data.country
-    msg.emoji = data.emoji
-    msg.latitude = data.latitude
-    msg.longitude = data.longitude
-
-    db.commit()
-    db.refresh(msg)
-    db.close()
-
-    return {"status": "editado", "id": msg.id}
-    # ========================
-# ADMIN: BORRAR MENSAJE
-# ========================
-@app.delete("/delete-message/{message_id}")
-def delete_message(message_id: int, x_admin_token: str = Header(None)):
-    if not x_admin_token or x_admin_token not in admin_tokens:
-        raise HTTPException(status_code=403, detail="Acceso denegado")
-
-    db: Session = SessionLocal()
-    msg = db.query(Message).filter(Message.id == message_id).first()
-
-    if not msg:
-        db.close()
-        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
-
-    db.delete(msg)
+    msg.hidden = True
     db.commit()
     db.close()
 
-    return {"status": "deleted", "id": message_id}
+    return {"status": "hidden"}
 
+# =========================
+# MOCK PAYMENT (NO TOCAR)
+# =========================
+@app.post("/payment-success")
+def payment_success():
+    token = str(uuid.uuid4())
+    return {"token": token}
+
+@app.post("/use-free-code")
+def use_free_code(payload: dict):
+    token = str(uuid.uuid4())
+    return {"token": token}
